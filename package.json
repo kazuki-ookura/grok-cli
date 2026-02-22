@@ -1,9 +1,17 @@
 {
-  "name": "@vibe-kit/grok-cli",
-  "version": "0.0.34",
-  "description": "An open-source AI agent that brings the power of Grok directly into your terminal.",
+  "name": "@kazuki-ookura/grok-cli",
+  "version": "1.0.0",
+  "description": "The community maintenance fork of Grok CLI. Fully updated for the latest xAI Responses API with native web/X search support.",
   "type": "module",
   "main": "dist/index.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kazuki-ookura/grok-cli"
+  },
+  "homepage": "https://github.com/kazuki-ookura/grok-cli",
+  "bugs": {
+    "url": "https://github.com/kazuki-ookura/grok-cli/issues"
+  },
   "exports": {
     ".": {
       "import": "./dist/index.js",
@@ -29,9 +37,12 @@
     "agent",
     "text-editor",
     "grok",
-    "ai"
+    "ai",
+    "xai",
+    "responses-api",
+    "maintenance-fork"
   ],
-  "author": "Your Name",
+  "author": "Kazuki Okura (https://github.com/kazuki-ookura)",
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",
@@ -52,7 +63,7 @@
   },
   "devDependencies": {
     "@types/fs-extra": "^11.0.2",
-    "@types/node": "^20.8.0",
+    "@types/node": "^25.3.0",
     "@types/react": "^18.3.3",
     "@typescript-eslint/eslint-plugin": "^8.37.0",
     "@typescript-eslint/parser": "^8.37.0",
