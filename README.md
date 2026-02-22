@@ -29,6 +29,17 @@ bun add -g @kazuki-ookura/grok-cli
 npm install -g @kazuki-ookura/grok-cli
 ```
 
+### Installation from Source (for Developers)
+If you want to contribute or use the latest source code:
+
+```bash
+git clone https://github.com/kazuki-ookura/grok-cli.git
+cd grok-cli
+bun install
+bun run build
+bun link # To use 'grok' command globally from source
+```
+
 ### Usage
 ```bash
 # Start interactive mode

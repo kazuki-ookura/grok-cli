@@ -30,8 +30,14 @@
     "start:bun": "bun run dist/index.js",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
     "typecheck": "tsc --noEmit",
-    "install:bun": "bun install"
+    "install:bun": "bun install",
+    "prepublishOnly": "bun run build && bun run typecheck"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "keywords": [
     "cli",
     "agent",
