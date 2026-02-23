@@ -117,7 +117,9 @@ export class CommandManager {
 
     let script = command.script;
     for (const [key, value] of Object.entries(args)) {
-      const placeholder = new RegExp(`\\{\\{${key}\\}\\}`, 'g');
+      // Escape regex special characters in keys to prevent ReDoS
+      const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const placeholder = new RegExp(`\\{\\{${escapedKey}\\}\\}`, 'g');
       script = script.replace(placeholder, this.escapeShellArg(String(value)));
     }
     // Reject execution if any placeholders remain unresolved
@@ -206,13 +208,19 @@ export class CommandManager {
 
   /**
    * Escapes a string to be safely used as a shell argument.
-   * Encloses the string in single quotes and escapes any single quotes within.
+   * Uses platform-appropriate escaping: single-quote wrapping for POSIX,
+   * double-quote wrapping with special char escaping for Windows cmd.exe.
    *
    * @param arg - The raw string to escape.
    * @returns The shell-safe escaped string.
    */
   private escapeShellArg(arg: string): string {
-    return "'" + arg.replace(/'/g, "'\\''" ) + "'";
+    if (process.platform === 'win32') {
+      // Windows cmd.exe: wrap in double quotes, escape internal special chars
+      return '"' + arg.replace(/["%!^&|<>]/g, '^$&') + '"';
+    }
+    // POSIX: wrap in single quotes, escape internal single quotes
+    return "'" + arg.replace(/'/g, "'\\''") + "'";
   }
 
   /**
@@ -234,6 +242,15 @@ export class CommandManager {
         return currentPath;
       }
       currentPath = path.dirname(currentPath);
+    }
+
+    // Check the filesystem root as well
+    if (
+      fs.existsSync(path.join(currentPath, '.grok')) ||
+      fs.existsSync(path.join(currentPath, '.claude')) ||
+      fs.existsSync(path.join(currentPath, '.git'))
+    ) {
+      return currentPath;
     }
 
     return null;
