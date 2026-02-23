@@ -52,9 +52,7 @@ export class MCPManager extends EventEmitter {
           version: "1.0.0"
         },
         {
-          capabilities: {
-            tools: {}
-          }
+          capabilities: {}
         }
       );
 
@@ -127,7 +125,7 @@ export class MCPManager extends EventEmitter {
     return await client.callTool({
       name: originalToolName,
       arguments: arguments_
-    });
+    }) as CallToolResult;
   }
 
   getTools(): MCPTool[] {

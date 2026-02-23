@@ -78,6 +78,9 @@
     "tsx": "^4.0.0",
     "typescript": "^5.3.3"
   },
+  "overrides": {
+    "minimatch": ">=10.2.1"
+  },
   "engines": {
     "node": ">=18.0.0"
   },
