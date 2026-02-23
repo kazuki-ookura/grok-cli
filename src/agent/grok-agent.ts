@@ -20,6 +20,7 @@ import { EventEmitter } from "events";
 import { createTokenCounter, TokenCounter } from "../utils/token-counter.js";
 import { loadCustomInstructions } from "../utils/custom-instructions.js";
 import { getSettingsManager } from "../utils/settings-manager.js";
+import { SkillManager } from "./skill-manager.js";
 
 export interface ChatEntry {
   type: "user" | "assistant" | "tool_result" | "tool_call";
@@ -59,6 +60,8 @@ export class GrokAgent extends EventEmitter {
   private abortController: AbortController | null = null;
   private mcpInitialized: boolean = false;
   private maxToolRounds: number;
+  private skillManager: SkillManager;
+  private skillsLoaded: boolean = false;
 
   /**
    * Initializes a new instance of GrokAgent.
@@ -88,6 +91,7 @@ export class GrokAgent extends EventEmitter {
     this.confirmationTool = new ConfirmationTool();
     this.search = new SearchTool();
     this.tokenCounter = createTokenCounter(modelToUse);
+    this.skillManager = new SkillManager();
 
     // Initialize MCP servers if configured
     this.initializeMCP();
@@ -213,6 +217,15 @@ Current working directory: ${process.cwd()}`,
     let toolRounds = 0;
 
     try {
+      if (!this.skillsLoaded) {
+        await this.skillManager.loadSkills(process.cwd());
+        const skillExt = this.skillManager.getSystemPromptExtension();
+        if (skillExt && this.messages[0].role === "system") {
+          this.messages[0].content += skillExt;
+        }
+        this.skillsLoaded = true;
+      }
+
       const tools = await getAllGrokTools();
       let currentResponse = await this.grokClient.chat(
         this.messages,
@@ -419,6 +432,15 @@ Current working directory: ${process.cwd()}`,
     let lastTokenUpdate = 0;
 
     try {
+      if (!this.skillsLoaded) {
+        await this.skillManager.loadSkills(process.cwd());
+        const skillExt = this.skillManager.getSystemPromptExtension();
+        if (skillExt && this.messages[0].role === "system") {
+          this.messages[0].content += skillExt;
+        }
+        this.skillsLoaded = true;
+      }
+
       // Agent loop - continue until no more tool calls or max rounds reached
       while (toolRounds < maxToolRounds) {
         // Check if operation was cancelled

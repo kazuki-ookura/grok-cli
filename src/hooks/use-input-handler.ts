@@ -207,6 +207,7 @@ export function useInputHandler({
     onSubmit: handleInputSubmit,
     onSpecialKey: handleSpecialKey,
     disabled: isConfirmationActive,
+    multiline: true,
   });
 
   // Hook up the actual input handling
