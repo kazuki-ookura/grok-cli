@@ -32,7 +32,7 @@ export interface Command {
   parameters: {
     type: "object";
     properties: Record<string, unknown>;
-    required?: string[];
+    required: string[];
   };
   /** Bash script template to execute */
   script: string;
@@ -90,11 +90,7 @@ export class CommandManager {
       function: {
         name: `cmd__${cmd.name}`,
         description: `[Custom Command] ${cmd.description}`,
-        parameters: cmd.parameters as {
-          type: "object";
-          properties: Record<string, any>;
-          required: string[];
-        },
+        parameters: cmd.parameters,
       },
     }));
   }
@@ -408,8 +404,8 @@ export class CommandManager {
       if (scriptMatch) {
         return scriptMatch[1].trim();
       }
-      // If no fenced block, use the raw section content
-      return scriptSection.trim();
+      // Do not use raw section content as it might not be a valid script
+      return '';
     }
 
     // Fallback: search the entire body for backwards compatibility
