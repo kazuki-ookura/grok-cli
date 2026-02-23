@@ -65,6 +65,30 @@ export async function getFileSuggestions(
           command: `@${fullPath}`,
           description: isDir ? "Directory" : "File"
         });
+
+        // Look one level deeper if it's a directory
+        if (isDir && suggestions.length < limit) {
+          try {
+            const subDirPath = path.join(searchDir, entry.name);
+            const subEntries = await fs.readdir(subDirPath, { withFileTypes: true });
+            for (const subEntry of subEntries) {
+              if (subEntry.name.startsWith('.')) continue;
+              
+              let subFullPath = `${fullPath}${subEntry.name}`;
+              const isSubDir = subEntry.isDirectory();
+              if (isSubDir) subFullPath += '/';
+              
+              suggestions.push({
+                command: `@${subFullPath}`,
+                description: isSubDir ? "Directory" : "File"
+              });
+              
+              if (suggestions.length >= limit) break;
+            }
+          } catch {
+            // Ignore permission or other read errors for subdirectories
+          }
+        }
       }
 
       if (suggestions.length >= limit) break;
