@@ -6,6 +6,7 @@ import { useEnhancedInput, Key } from "./use-enhanced-input.js";
 
 import { filterCommandSuggestions } from "../ui/components/command-suggestions.js";
 import { loadModelConfig, updateCurrentModel } from "../utils/model-config.js";
+import { getFileSuggestions, FileSuggestion } from "../utils/file-search.js";
 
 interface UseInputHandlerProps {
   agent: GrokAgent;
@@ -52,6 +53,10 @@ export function useInputHandler({
     const sessionFlags = confirmationService.getSessionFlags();
     return sessionFlags.allOperations;
   });
+
+  const [showFileSuggestions, setShowFileSuggestions] = useState(false);
+  const [fileSuggestions, setFileSuggestions] = useState<FileSuggestion[]>([]);
+  const [selectedFileIndex, setSelectedFileIndex] = useState(0);
 
   const handleSpecialKey = (key: Key): boolean => {
     // Don't handle input if confirmation dialog is active
@@ -130,12 +135,56 @@ export function useInputHandler({
           );
           const selectedCommand = filteredSuggestions[safeIndex];
           const newInput = selectedCommand.command + " ";
-          setInput(newInput);
-          setCursorPosition(newInput.length);
+          setInputAndCursor(newInput, newInput.length);
           setShowCommandSuggestions(false);
           setSelectedCommandIndex(0);
           return true;
         }
+      }
+    }
+
+    // Handle file suggestions navigation
+    if (showFileSuggestions) {
+      if (key.upArrow) {
+        setSelectedFileIndex((prev) =>
+          prev === 0 ? fileSuggestions.length - 1 : prev - 1
+        );
+        return true;
+      }
+      if (key.downArrow) {
+        setSelectedFileIndex((prev) => (prev + 1) % fileSuggestions.length);
+        return true;
+      }
+      if (key.tab || key.return) {
+        const selected = fileSuggestions[selectedFileIndex];
+        
+        // Replace the current word with the selected suggestion
+        // This regex splits by spaces but keeps the spaces in the array
+        const words = input.split(/(\s+)/);
+        let currentPos = 0;
+        let wordIndex = -1;
+        
+        for (let i = 0; i < words.length; i++) {
+          if (cursorPosition >= currentPos && cursorPosition <= currentPos + words[i].length) {
+            wordIndex = i;
+            break;
+          }
+          currentPos += words[i].length;
+        }
+
+        if (wordIndex !== -1) {
+          const beforeWord = words.slice(0, wordIndex).join("");
+          const afterWord = words.slice(wordIndex + 1).join("");
+          const newInput = beforeWord + selected.command + " " + afterWord;
+          setInputAndCursor(
+            newInput,
+            beforeWord.length + selected.command.length + 1
+          );
+        }
+
+        setShowFileSuggestions(false);
+        setSelectedFileIndex(0);
+        return true;
       }
     }
 
@@ -193,6 +242,33 @@ export function useInputHandler({
       setShowCommandSuggestions(false);
       setSelectedCommandIndex(0);
     }
+
+    // Update file suggestions based on current word
+    const words = newInput.split(/\s+/);
+    // Find word at cursor
+    let currentPos = 0;
+    let currentWord = "";
+    for (const word of words) {
+      if (currentPos <= cursorPosition && cursorPosition <= currentPos + word.length) {
+        currentWord = word;
+        break;
+      }
+      currentPos += word.length + 1;
+    }
+
+    if (currentWord.startsWith("@")) {
+      const partialPath = currentWord.substring(1);
+      getFileSuggestions(partialPath).then((suggestions) => {
+        if (suggestions.length > 0) {
+          setFileSuggestions(suggestions);
+          setShowFileSuggestions(true);
+        } else {
+          setShowFileSuggestions(false);
+        }
+      });
+    } else {
+      setShowFileSuggestions(false);
+    }
   };
 
   const {
@@ -200,6 +276,7 @@ export function useInputHandler({
     cursorPosition,
     setInput,
     setCursorPosition,
+    setInputAndCursor,
     clearInput,
     resetHistory,
     handleInput,
@@ -749,5 +826,8 @@ Respond with ONLY the commit message, no additional text.`;
     availableModels,
     agent,
     autoEditEnabled,
+    showFileSuggestions,
+    fileSuggestions,
+    selectedFileIndex,
   };
 }

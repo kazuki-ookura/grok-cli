@@ -34,7 +34,7 @@ export function CommandSuggestions({
   if (!isVisible) return null;
 
   const filteredSuggestions = useMemo(
-    () => filterCommandSuggestions(suggestions, input),
+    () => (input ? filterCommandSuggestions(suggestions, input) : suggestions),
     [suggestions, input]
   );
 

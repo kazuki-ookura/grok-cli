@@ -51,6 +51,9 @@ function ChatInterfaceWithAgent({
     commandSuggestions,
     availableModels,
     autoEditEnabled,
+    showFileSuggestions,
+    fileSuggestions,
+    selectedFileIndex,
   } = useInputHandler({
     agent,
     chatHistory,
@@ -369,6 +372,13 @@ function ChatInterfaceWithAgent({
             </Box>
             <MCPStatus />
           </Box>
+
+          <CommandSuggestions
+            suggestions={fileSuggestions}
+            input=""
+            selectedIndex={selectedFileIndex}
+            isVisible={showFileSuggestions}
+          />
 
           <CommandSuggestions
             suggestions={commandSuggestions}
