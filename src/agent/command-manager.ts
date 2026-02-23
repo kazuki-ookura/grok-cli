@@ -120,8 +120,11 @@ export class CommandManager {
       const placeholder = new RegExp(`\\{\\{${key}\\}\\}`, 'g');
       script = script.replace(placeholder, this.escapeShellArg(String(value)));
     }
-    // Remove any remaining unreplaced placeholders
-    script = script.replace(/\{\{[^}]+\}\}/g, '');
+    // Reject execution if any placeholders remain unresolved
+    const unresolved = script.match(/\{\{[^}]+\}\}/g);
+    if (unresolved) {
+      return null;
+    }
     return script;
   }
 
@@ -149,8 +152,20 @@ export class CommandManager {
     args: Record<string, unknown>
   ): Promise<{ success: boolean; output?: string; error?: string }> {
     const script = this.resolveScript(name, args);
-    if (!script) {
-      return { success: false, error: `Unknown command: ${name}` };
+    if (script === null) {
+      const command = this.getCommand(name);
+      if (!command) {
+        return { success: false, error: `Unknown command: ${name}` };
+      }
+      // Unresolved placeholders detected
+      const unresolvedMatch = command.script.match(/\{\{[^}]+\}\}/g);
+      const missing = unresolvedMatch
+        ? unresolvedMatch.map(p => p.replace(/[{}]/g, '')).filter(p => !(p in args))
+        : [];
+      return {
+        success: false,
+        error: `Missing required arguments: ${missing.join(', ')}. Command not executed.`
+      };
     }
 
     // Request user confirmation before executing the command
@@ -293,34 +308,70 @@ export class CommandManager {
     const name = nameMatch[1].trim();
     const description = descMatch ? descMatch[1].trim() : `Custom command: ${name}`;
 
-    // Extract parameters JSON from ```json block
+    // Split body into sections by ## headings for section-aware parsing
+    const sections = new Map<string, string>();
+    const sectionRegex = /^##\s+(.+)$/gm;
+    let lastHeading = '';
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = sectionRegex.exec(body)) !== null) {
+      if (lastHeading) {
+        sections.set(lastHeading.toLowerCase(), body.slice(lastIndex, match.index));
+      }
+      lastHeading = match[1].trim();
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastHeading) {
+      sections.set(lastHeading.toLowerCase(), body.slice(lastIndex));
+    }
+
+    // Extract parameters JSON from ```json block under ## Parameters section
     let parameters: Command['parameters'] = {
       type: "object" as const,
       properties: {},
       required: [],
     };
 
-    const jsonMatch = body.match(/```json\s*\n([\s\S]*?)\n\s*```/);
-    if (jsonMatch) {
-      try {
-        parameters = JSON.parse(jsonMatch[1].trim());
-      } catch {
-        console.warn(`Failed to parse parameters JSON in ${filePath}`);
+    const parametersSection = sections.get('parameters');
+    if (parametersSection) {
+      const jsonMatch = parametersSection.match(/```json\s*\n([\s\S]*?)\n\s*```/);
+      if (jsonMatch) {
+        try {
+          parameters = JSON.parse(jsonMatch[1].trim());
+        } catch {
+          console.warn(`Failed to parse parameters JSON in ${filePath}`);
+        }
+      }
+    } else {
+      // Fallback: search the entire body for backwards compatibility
+      const jsonMatch = body.match(/```json\s*\n([\s\S]*?)\n\s*```/);
+      if (jsonMatch) {
+        try {
+          parameters = JSON.parse(jsonMatch[1].trim());
+        } catch {
+          console.warn(`Failed to parse parameters JSON in ${filePath}`);
+        }
       }
     }
 
-    // Extract script from ```bash or ```sh block
+    // Extract script from ```bash or ```sh block under ## Script/Command section
     let script = '';
-    const scriptMatch = body.match(/```(?:bash|sh)\s*\n([\s\S]*?)\n\s*```/);
-    if (scriptMatch) {
-      script = scriptMatch[1].trim();
-    }
-
-    // If no script block found, try to extract content after "## Script" or "## Command" heading
-    if (!script) {
-      const scriptSectionMatch = body.match(/##\s*(?:Script|Command)\s*\n([\s\S]*?)(?=\n##|$)/i);
-      if (scriptSectionMatch) {
-        script = scriptSectionMatch[1].trim();
+    const scriptSection = sections.get('script') || sections.get('command');
+    if (scriptSection) {
+      const scriptMatch = scriptSection.match(/```(?:bash|sh)\s*\n([\s\S]*?)\n\s*```/);
+      if (scriptMatch) {
+        script = scriptMatch[1].trim();
+      }
+      // If no fenced block, use the raw section content
+      if (!script) {
+        script = scriptSection.trim();
+      }
+    } else {
+      // Fallback: search the entire body for backwards compatibility
+      const scriptMatch = body.match(/```(?:bash|sh)\s*\n([\s\S]*?)\n\s*```/);
+      if (scriptMatch) {
+        script = scriptMatch[1].trim();
       }
     }
 
