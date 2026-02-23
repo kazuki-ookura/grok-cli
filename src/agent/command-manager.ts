@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
 import { GrokTool } from '../grok/client.js';
+import { ConfirmationService } from '../utils/confirmation-service.js';
 
 /**
  * Represents a custom command (tool) defined in a Markdown file.
@@ -27,8 +28,12 @@ export interface Command {
   name: string;
   /** Command description (from YAML frontmatter `description` field) */
   description: string;
-  /** Parameter schema for the command (JSON Schema) */
-  parameters: Record<string, unknown>;
+  /** Parameter schema for the command (JSON Schema object) */
+  parameters: {
+    type: "object";
+    properties: Record<string, unknown>;
+    required?: string[];
+  };
   /** Bash script template to execute */
   script: string;
   /** Absolute path to the command definition file */
@@ -95,6 +100,32 @@ export class CommandManager {
   }
 
   /**
+   * Resolves the final script string by replacing placeholders with
+   * shell-escaped argument values. Useful for previewing the command
+   * before execution (e.g. for user confirmation).
+   *
+   * @param name - Command name (without `cmd__` prefix).
+   * @param args - Object containing argument key-value pairs.
+   * @returns The resolved script string, or null if the command is not found.
+   */
+  public resolveScript(
+    name: string,
+    args: Record<string, unknown>
+  ): string | null {
+    const command = this.getCommand(name);
+    if (!command) return null;
+
+    let script = command.script;
+    for (const [key, value] of Object.entries(args)) {
+      const placeholder = new RegExp(`\\{\\{${key}\\}\\}`, 'g');
+      script = script.replace(placeholder, this.escapeShellArg(String(value)));
+    }
+    // Remove any remaining unreplaced placeholders
+    script = script.replace(/\{\{[^}]+\}\}/g, '');
+    return script;
+  }
+
+  /**
    * Retrieves a Command object by name.
    *
    * @param name - Command name (without `cmd__` prefix).
@@ -117,20 +148,29 @@ export class CommandManager {
     name: string,
     args: Record<string, unknown>
   ): Promise<{ success: boolean; output?: string; error?: string }> {
-    const command = this.getCommand(name);
-    if (!command) {
+    const script = this.resolveScript(name, args);
+    if (!script) {
       return { success: false, error: `Unknown command: ${name}` };
     }
 
-    // Replace placeholders in script template
-    let script = command.script;
-    for (const [key, value] of Object.entries(args)) {
-      const placeholder = new RegExp(`\\{\\{${key}\\}\\}`, 'g');
-      script = script.replace(placeholder, String(value));
-    }
+    // Request user confirmation before executing the command
+    const confirmationService = ConfirmationService.getInstance();
+    const sessionFlags = confirmationService.getSessionFlags();
+    if (!sessionFlags.bashCommands && !sessionFlags.allOperations) {
+      const confirmationResult = await confirmationService.requestConfirmation({
+        operation: `Run custom command: ${name}`,
+        filename: script,
+        showVSCodeOpen: false,
+        content: `Script:\n${script}`
+      }, 'bash');
 
-    // Remove any remaining unreplaced placeholders
-    script = script.replace(/\{\{[^}]+\}\}/g, '');
+      if (!confirmationResult.confirmed) {
+        return {
+          success: false,
+          error: confirmationResult.feedback || 'Command execution cancelled by user'
+        };
+      }
+    }
 
     return new Promise((resolve) => {
       exec(script, { timeout: 30000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
@@ -147,6 +187,17 @@ export class CommandManager {
         }
       });
     });
+  }
+
+  /**
+   * Escapes a string to be safely used as a shell argument.
+   * Encloses the string in single quotes and escapes any single quotes within.
+   *
+   * @param arg - The raw string to escape.
+   * @returns The shell-safe escaped string.
+   */
+  private escapeShellArg(arg: string): string {
+    return "'" + arg.replace(/'/g, "'\\''" ) + "'";
   }
 
   /**
@@ -168,15 +219,6 @@ export class CommandManager {
         return currentPath;
       }
       currentPath = path.dirname(currentPath);
-    }
-
-    // Check the filesystem root as well
-    if (
-      fs.existsSync(path.join(currentPath, '.grok')) ||
-      fs.existsSync(path.join(currentPath, '.claude')) ||
-      fs.existsSync(path.join(currentPath, '.git'))
-    ) {
-      return currentPath;
     }
 
     return null;
@@ -252,8 +294,8 @@ export class CommandManager {
     const description = descMatch ? descMatch[1].trim() : `Custom command: ${name}`;
 
     // Extract parameters JSON from ```json block
-    let parameters: Record<string, unknown> = {
-      type: "object",
+    let parameters: Command['parameters'] = {
+      type: "object" as const,
       properties: {},
       required: [],
     };
