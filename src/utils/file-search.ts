@@ -52,13 +52,18 @@ export async function getFileSuggestions(
       }
 
       if (entry.name.toLowerCase().startsWith(fileNamePart.toLowerCase())) {
-        const fullPath = partialPath.includes('/') 
-          ? path.join(partialPath.substring(0, partialPath.lastIndexOf('/')), entry.name)
+        let fullPath = partialPath.includes('/') 
+          ? `${partialPath.substring(0, partialPath.lastIndexOf('/'))}/${entry.name}`
           : entry.name;
         
+        const isDir = entry.isDirectory();
+        if (isDir) {
+          fullPath += '/';
+        }
+
         suggestions.push({
           command: `@${fullPath}`,
-          description: entry.isDirectory() ? "Directory" : "File"
+          description: isDir ? "Directory" : "File"
         });
       }
 
