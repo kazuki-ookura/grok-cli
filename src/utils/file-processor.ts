@@ -121,21 +121,28 @@ async function findFileReferences(content: string, cwd: string): Promise<Array<{
       while (k < len && content[k] !== '\n' && (k - i) < 255) {
         currentCandidate += content[k];
         
-        // Check if the current candidate (potentially with spaces) exists
-        const trimmedCandidate = currentCandidate.trim();
-        // Remove trailing delimiters from candidate for check
-        const cleanCandidate = trimmedCandidate.replace(/[.,;:)\]}"'>]+$/, '');
+        // Only run fs.stat at word boundaries to reduce I/O overhead
+        const nextChar = k + 1 < len ? content[k + 1] : '\n';
+        const isBoundary = isWhitespace(nextChar) || nextChar === '\n' || isEndDelimiter(nextChar) || (k - i + 1) >= 255;
         
-        if (cleanCandidate.length > 0) {
-          try {
-            const fullPath = path.resolve(cwd, cleanCandidate);
-            const stats = await fs.stat(fullPath);
-            if (stats.isFile() || stats.isDirectory()) {
-              bestPath = cleanCandidate;
-              bestEnd = k + 1;
+        if (isBoundary) {
+          // Check if the current candidate (potentially with spaces) exists
+          const trimmedCandidate = currentCandidate.trim();
+          // Remove trailing delimiters from candidate for check
+          const cleanCandidate = trimmedCandidate.replace(/[.,;:)\]}"'>]+$/, '');
+          
+          if (cleanCandidate.length > 0) {
+            try {
+              const fullPath = path.resolve(cwd, cleanCandidate);
+              const stats = await fs.stat(fullPath);
+              if (stats.isFile() || stats.isDirectory()) {
+                bestPath = cleanCandidate;
+                const matchIndex = currentCandidate.lastIndexOf(cleanCandidate);
+                bestEnd = i + 1 + matchIndex + cleanCandidate.length;
+              }
+            } catch {
+              // Not a valid path yet, keep looking
             }
-          } catch {
-            // Not a valid path yet, keep looking
           }
         }
         k++;

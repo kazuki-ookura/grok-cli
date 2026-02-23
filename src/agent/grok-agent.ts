@@ -1,4 +1,6 @@
 import { GrokClient, GrokMessage, GrokToolCall } from "../grok/client.js";
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { expandFilePaths } from "../utils/file-processor.js";
 import {
   GROK_TOOLS,
@@ -87,7 +89,7 @@ export class GrokAgent extends EventEmitter {
     const manager = getSettingsManager();
     const savedModel = manager.getCurrentModel();
     const modelToUse = model || savedModel || "grok-code-fast-1";
-    this.maxToolRounds = maxToolRounds || 10;
+    this.maxToolRounds = maxToolRounds || 30;
     this.grokClient = new GrokClient(apiKey, modelToUse, baseURL);
     this.textEditor = new TextEditorTool();
     this.morphEditor = process.env.MORPH_API_KEY ? new MorphEditorTool() : null;
@@ -596,12 +598,12 @@ Current working directory: ${process.cwd()}`,
 
             console.log(`Executing tool: ${toolCall.function.name} with ID ${toolCall.id}`);
             
-            // Set a timeout for tool execution (30 seconds)
+            // Set a timeout for tool execution (120 seconds)
             const timeoutPromise = new Promise<ToolResult>((_, reject) =>
               setTimeout(() => {
                 console.error(`Tool ${toolCall.function.name} (${toolCall.id}) timed out!`);
-                reject(new Error("Tool execution timed out after 30 seconds"));
-              }, 30000)
+                reject(new Error("Tool execution timed out after 120 seconds"));
+              }, 120000)
             );
 
             try {
@@ -710,28 +712,36 @@ Current working directory: ${process.cwd()}`,
     }
   }
 
+  private validateArgs(args: any, required: string[]): { valid: true } | { valid: false; error: string } {
+    const missing = required.filter(key => args[key] === undefined || args[key] === null);
+    if (missing.length > 0) {
+      return { valid: false, error: `Missing required arguments: ${missing.join(", ")}` };
+    }
+    return { valid: true };
+  }
+
   private async executeTool(toolCall: GrokToolCall): Promise<ToolResult> {
     try {
       const args = this.parseToolArguments(toolCall);
+      const validation = (req: string[]) => this.validateArgs(args, req);
 
       switch (toolCall.function.name) {
-        case "view_file":
-          if (!args.path) {
-            return { success: false, error: "Missing required argument: path" };
-          }
+        case "view_file": {
+          const v = validation(["path"]);
+          if (!v.valid) return { success: false, error: v.error };
+          
           const range: [number, number] | undefined =
             args.start_line && args.end_line
               ? [args.start_line, args.end_line]
               : undefined;
           return await this.textEditor.view(args.path, range);
+        }
 
-        case "list_directory":
-          if (!args.path) {
-            return { success: false, error: "Missing required argument: path" };
-          }
+        case "list_directory": {
+          const v = validation(["path"]);
+          if (!v.valid) return { success: false, error: v.error };
+          
           try {
-            const fs = await import('fs/promises');
-            const path = await import('path');
             const fullPath = path.resolve(args.path);
             const stats = await fs.stat(fullPath);
             if (!stats.isDirectory()) {
@@ -746,25 +756,26 @@ Current working directory: ${process.cwd()}`,
           } catch (err: any) {
              return { success: false, error: `Failed to list directory: ${err.message}` };
           }
+        }
 
-        case "create_file":
-          if (!args.path || args.content === undefined) {
-            return { success: false, error: "Missing required arguments: path and content" };
-          }
+        case "create_file": {
+          const v = validation(["path", "content"]);
+          if (!v.valid) return { success: false, error: v.error };
           return await this.textEditor.create(args.path, args.content);
+        }
 
-        case "str_replace_editor":
-          if (!args.path || !args.old_str || args.new_str === undefined) {
-            return { success: false, error: "Missing required arguments: path, old_str, and new_str" };
-          }
+        case "str_replace_editor": {
+          const v = validation(["path", "old_str", "new_str"]);
+          if (!v.valid) return { success: false, error: v.error };
           return await this.textEditor.strReplace(
             args.path,
             args.old_str,
             args.new_str,
             args.replace_all
           );
+        }
 
-        case "edit_file":
+        case "edit_file": {
           if (!this.morphEditor) {
             return {
               success: false,
@@ -772,37 +783,36 @@ Current working directory: ${process.cwd()}`,
                 "Morph Fast Apply not available. Please set MORPH_API_KEY environment variable to use this feature.",
             };
           }
-          if (!args.target_file || !args.instructions) {
-            return { success: false, error: "Missing required arguments: target_file and instructions" };
-          }
+          const v = validation(["target_file", "instructions"]);
+          if (!v.valid) return { success: false, error: v.error };
           return await this.morphEditor.editFile(
             args.target_file,
             args.instructions,
             args.code_edit
           );
+        }
 
-        case "bash":
-          if (!args.command) {
-            return { success: false, error: "Missing required argument: command" };
-          }
+        case "bash": {
+          const v = validation(["command"]);
+          if (!v.valid) return { success: false, error: v.error };
           return await this.bash.execute(args.command);
+        }
 
-        case "create_todo_list":
-          if (!args.todos) {
-            return { success: false, error: "Missing required argument: todos" };
-          }
+        case "create_todo_list": {
+          const v = validation(["todos"]);
+          if (!v.valid) return { success: false, error: v.error };
           return await this.todoTool.createTodoList(args.todos);
+        }
 
-        case "update_todo_list":
-          if (!args.updates) {
-            return { success: false, error: "Missing required argument: updates" };
-          }
+        case "update_todo_list": {
+          const v = validation(["updates"]);
+          if (!v.valid) return { success: false, error: v.error };
           return await this.todoTool.updateTodoList(args.updates);
+        }
 
-        case "search":
-          if (!args.query) {
-            return { success: false, error: "Missing required argument: query" };
-          }
+        case "search": {
+          const v = validation(["query"]);
+          if (!v.valid) return { success: false, error: v.error };
           return await this.search.search(args.query, {
             searchType: args.search_type,
             includePattern: args.include_pattern,
@@ -814,6 +824,7 @@ Current working directory: ${process.cwd()}`,
             fileTypes: args.file_types,
             includeHidden: args.include_hidden,
           });
+        }
 
         default:
           // Check if this is an MCP tool

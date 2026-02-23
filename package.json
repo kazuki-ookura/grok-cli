@@ -22,6 +22,7 @@
     "grok": "dist/index.js"
   },
   "scripts": {
+    "test": "vitest run",
     "build": "tsc",
     "build:bun": "bun run tsc",
     "dev": "bun run src/index.ts",
@@ -76,7 +77,8 @@
     "@typescript-eslint/parser": "^8.37.0",
     "eslint": "^9.31.0",
     "tsx": "^4.0.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^4.0.18"
   },
   "overrides": {
     "minimatch": ">=10.2.1"
