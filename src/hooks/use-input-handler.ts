@@ -175,10 +175,12 @@ export function useInputHandler({
         if (wordIndex !== -1) {
           const beforeWord = words.slice(0, wordIndex).join("");
           const afterWord = words.slice(wordIndex + 1).join("");
-          const newInput = beforeWord + selected.command + " " + afterWord;
+          const isDirPattern = selected.command.endsWith("/");
+          const spaceAfter = isDirPattern ? "" : " ";
+          const newInput = beforeWord + selected.command + spaceAfter + afterWord;
           setInputAndCursor(
             newInput,
-            beforeWord.length + selected.command.length + 1
+            beforeWord.length + selected.command.length + spaceAfter.length
           );
         }
 

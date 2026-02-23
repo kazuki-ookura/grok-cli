@@ -8,13 +8,13 @@ const BASE_GROK_TOOLS: GrokTool[] = [
     type: "function",
     function: {
       name: "view_file",
-      description: "View contents of a file or list directory contents",
+      description: "Reads and returns the content of a specified file. Use list_directory if you want to view the contents of a directory.",
       parameters: {
         type: "object",
         properties: {
           path: {
             type: "string",
-            description: "Path to file or directory to view",
+            description: "Path to the file to view",
           },
           start_line: {
             type: "number",
@@ -24,6 +24,23 @@ const BASE_GROK_TOOLS: GrokTool[] = [
           end_line: {
             type: "number",
             description: "Ending line number for partial file view (optional)",
+          },
+        },
+        required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_directory",
+      description: "Lists the names of files and subdirectories directly within a specified directory path.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Path to the directory to list",
           },
         },
         required: ["path"],

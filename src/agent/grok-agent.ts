@@ -1,4 +1,6 @@
 import { GrokClient, GrokMessage, GrokToolCall } from "../grok/client.js";
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { expandFilePaths } from "../utils/file-processor.js";
 import {
   GROK_TOOLS,
@@ -87,7 +89,7 @@ export class GrokAgent extends EventEmitter {
     const manager = getSettingsManager();
     const savedModel = manager.getCurrentModel();
     const modelToUse = model || savedModel || "grok-code-fast-1";
-    this.maxToolRounds = maxToolRounds || 400;
+    this.maxToolRounds = maxToolRounds || 30;
     this.grokClient = new GrokClient(apiKey, modelToUse, baseURL);
     this.textEditor = new TextEditorTool();
     this.morphEditor = process.env.MORPH_API_KEY ? new MorphEditorTool() : null;
@@ -565,16 +567,25 @@ Current working directory: ${process.cwd()}`,
         if (accumulatedMessage.tool_calls?.length > 0) {
           toolRounds++;
 
+          // Safety limit: don't execute more than 15 tool calls in a single round
+          const toolCallsToExecute = accumulatedMessage.tool_calls.slice(0, 15);
+          if (accumulatedMessage.tool_calls.length > 15) {
+            yield {
+              type: "content",
+              content: `\n\n[Warning: Too many tool calls requested (${accumulatedMessage.tool_calls.length}). Executing only the first 15 to prevent overload.]`,
+            };
+          }
+
           // Only yield tool_calls if we haven't already yielded them during streaming
           if (!toolCallsYielded) {
             yield {
               type: "tool_calls",
-              toolCalls: accumulatedMessage.tool_calls,
+              toolCalls: toolCallsToExecute,
             };
           }
 
           // Execute tools
-          for (const toolCall of accumulatedMessage.tool_calls) {
+          for (const toolCall of toolCallsToExecute) {
             // Check for cancellation before executing each tool
             if (this.abortController?.signal.aborted) {
               yield {
@@ -585,33 +596,65 @@ Current working directory: ${process.cwd()}`,
               return;
             }
 
-            const result = await this.executeTool(toolCall);
+            console.log(`Executing tool: ${toolCall.function.name} with ID ${toolCall.id}`);
+            
+            // Set a timeout for tool execution (120 seconds)
+            const timeoutPromise = new Promise<ToolResult>((_, reject) =>
+              setTimeout(() => {
+                console.error(`Tool ${toolCall.function.name} (${toolCall.id}) timed out!`);
+                reject(new Error("Tool execution timed out after 120 seconds"));
+              }, 120000)
+            );
 
-            const toolResultEntry: ChatEntry = {
-              type: "tool_result",
-              content: result.success
-                ? result.output || "Success"
-                : result.error || "Error occurred",
-              timestamp: new Date(),
-              toolCall: toolCall,
-              toolResult: result,
-            };
-            this.chatHistory.push(toolResultEntry);
+            try {
+              const result = await Promise.race([
+                this.executeTool(toolCall),
+                timeoutPromise
+              ]);
 
-            yield {
-              type: "tool_result",
-              toolCall,
-              toolResult: result,
-            };
+              console.log(`Tool ${toolCall.function.name} completed successfully`);
 
-            // Add tool result with proper format (needed for AI context)
-            this.messages.push({
-              role: "tool",
-              content: result.success
-                ? result.output || "Success"
-                : result.error || "Error",
-              tool_call_id: toolCall.id,
-            });
+              const toolResultEntry: ChatEntry = {
+                type: "tool_result",
+                content: result.success
+                  ? result.output || "Success"
+                  : result.error || "Error occurred",
+                timestamp: new Date(),
+                toolCall: toolCall,
+                toolResult: result,
+              };
+              this.chatHistory.push(toolResultEntry);
+
+              yield {
+                type: "tool_result",
+                toolCall,
+                toolResult: result,
+              };
+
+              // Add tool result with proper format (needed for AI context)
+              this.messages.push({
+                role: "tool",
+                content: result.success
+                  ? result.output || "Success"
+                  : result.error || "Error",
+                tool_call_id: toolCall.id,
+              });
+            } catch (error: any) {
+              const errorResult = {
+                success: false,
+                error: `Tool execution failed: ${error.message}`,
+              };
+              yield {
+                type: "tool_result",
+                toolCall,
+                toolResult: errorResult,
+              };
+              this.messages.push({
+                role: "tool",
+                content: errorResult.error,
+                tool_call_id: toolCall.id,
+              });
+            }
           }
 
           // Update token count after processing all tool calls to include tool results
@@ -669,30 +712,70 @@ Current working directory: ${process.cwd()}`,
     }
   }
 
+  private validateArgs(args: any, required: string[]): { valid: true; error?: undefined } | { valid: false; error: string } {
+    const missing = required.filter(key => args[key] === undefined || args[key] === null);
+    if (missing.length > 0) {
+      return { valid: false, error: `Missing required arguments: ${missing.join(", ")}` };
+    }
+    return { valid: true };
+  }
+
   private async executeTool(toolCall: GrokToolCall): Promise<ToolResult> {
     try {
-      const args = JSON.parse(toolCall.function.arguments);
+      const args = this.parseToolArguments(toolCall);
+      const validation = (req: string[]) => this.validateArgs(args, req);
 
       switch (toolCall.function.name) {
-        case "view_file":
+        case "view_file": {
+          const v = validation(["path"]);
+          if (!v.valid) return { success: false, error: v.error };
+          
           const range: [number, number] | undefined =
             args.start_line && args.end_line
               ? [args.start_line, args.end_line]
               : undefined;
           return await this.textEditor.view(args.path, range);
+        }
 
-        case "create_file":
+        case "list_directory": {
+          const v = validation(["path"]);
+          if (!v.valid) return { success: false, error: v.error };
+          
+          try {
+            const fullPath = path.resolve(args.path);
+            const stats = await fs.stat(fullPath);
+            if (!stats.isDirectory()) {
+              return { success: false, error: `Path is not a directory: ${args.path}` };
+            }
+            const entries = await fs.readdir(fullPath, { withFileTypes: true });
+            const list = entries.map(e => e.isDirectory() ? `${e.name}/` : e.name).join('\n');
+            return {
+              success: true,
+              output: `Directory contents of ${args.path}:\n${list}`
+            };
+          } catch (err: any) {
+             return { success: false, error: `Failed to list directory: ${err.message}` };
+          }
+        }
+
+        case "create_file": {
+          const v = validation(["path", "content"]);
+          if (!v.valid) return { success: false, error: v.error };
           return await this.textEditor.create(args.path, args.content);
+        }
 
-        case "str_replace_editor":
+        case "str_replace_editor": {
+          const v = validation(["path", "old_str", "new_str"]);
+          if (!v.valid) return { success: false, error: v.error };
           return await this.textEditor.strReplace(
             args.path,
             args.old_str,
             args.new_str,
             args.replace_all
           );
+        }
 
-        case "edit_file":
+        case "edit_file": {
           if (!this.morphEditor) {
             return {
               success: false,
@@ -700,22 +783,36 @@ Current working directory: ${process.cwd()}`,
                 "Morph Fast Apply not available. Please set MORPH_API_KEY environment variable to use this feature.",
             };
           }
+          const v = validation(["target_file", "instructions"]);
+          if (!v.valid) return { success: false, error: v.error };
           return await this.morphEditor.editFile(
             args.target_file,
             args.instructions,
             args.code_edit
           );
+        }
 
-        case "bash":
+        case "bash": {
+          const v = validation(["command"]);
+          if (!v.valid) return { success: false, error: v.error };
           return await this.bash.execute(args.command);
+        }
 
-        case "create_todo_list":
+        case "create_todo_list": {
+          const v = validation(["todos"]);
+          if (!v.valid) return { success: false, error: v.error };
           return await this.todoTool.createTodoList(args.todos);
+        }
 
-        case "update_todo_list":
+        case "update_todo_list": {
+          const v = validation(["updates"]);
+          if (!v.valid) return { success: false, error: v.error };
           return await this.todoTool.updateTodoList(args.updates);
+        }
 
-        case "search":
+        case "search": {
+          const v = validation(["query"]);
+          if (!v.valid) return { success: false, error: v.error };
           return await this.search.search(args.query, {
             searchType: args.search_type,
             includePattern: args.include_pattern,
@@ -727,6 +824,7 @@ Current working directory: ${process.cwd()}`,
             fileTypes: args.file_types,
             includeHidden: args.include_hidden,
           });
+        }
 
         default:
           // Check if this is an MCP tool
@@ -754,7 +852,7 @@ Current working directory: ${process.cwd()}`,
 
   private async executeMCPTool(toolCall: GrokToolCall): Promise<ToolResult> {
     try {
-      const args = JSON.parse(toolCall.function.arguments);
+      const args = this.parseToolArguments(toolCall);
       const mcpManager = getMCPManager();
 
       const result = await mcpManager.callTool(toolCall.function.name, args);
@@ -799,7 +897,7 @@ Current working directory: ${process.cwd()}`,
    */
   private async executeCustomCommand(toolCall: GrokToolCall): Promise<ToolResult> {
     try {
-      const args = JSON.parse(toolCall.function.arguments);
+      const args = this.parseToolArguments(toolCall);
       const commandName = toolCall.function.name.replace(/^cmd__/, '');
       return await this.commandManager.executeCommand(commandName, args);
     } catch (error: any) {
@@ -807,6 +905,27 @@ Current working directory: ${process.cwd()}`,
         success: false,
         error: `Custom command execution error: ${error.message}`,
       };
+    }
+  }
+
+  /**
+   * Safely parses JSON arguments from a tool call.
+   * Returns an empty object if arguments are missing or malformed.
+   * 
+   * @param toolCall - The tool call containing arguments.
+   * @returns Parsed arguments object.
+   */
+  private parseToolArguments(toolCall: GrokToolCall): any {
+    const rawArgs = toolCall.function.arguments;
+    if (!rawArgs || rawArgs.trim() === "") {
+      return {};
+    }
+    
+    try {
+      return JSON.parse(rawArgs);
+    } catch (error) {
+      console.error(`Failed to parse tool arguments: ${rawArgs}`, error);
+      return {};
     }
   }
 

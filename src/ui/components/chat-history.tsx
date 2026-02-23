@@ -94,6 +94,8 @@ const MemoizedChatEntry = React.memo(
           switch (toolName) {
             case "view_file":
               return "Read";
+            case "list_directory":
+              return "Read Directory";
             case "str_replace_editor":
               return "Update";
             case "create_file":

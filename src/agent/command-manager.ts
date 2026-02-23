@@ -111,6 +111,17 @@ export class CommandManager {
     const command = this.getCommand(name);
     if (!command) return null;
 
+    // Reject execution if any placeholders from the original script are missing in args
+    const originalPlaceholders = command.script.match(/\{\{([^}]+)\}\}/g);
+    if (originalPlaceholders) {
+      for (const placeholder of originalPlaceholders) {
+        const key = placeholder.slice(2, -2);
+        if (!(key in args)) {
+          return null;
+        }
+      }
+    }
+
     let script = command.script;
     for (const [key, value] of Object.entries(args)) {
       // Escape regex special characters in keys to prevent ReDoS
@@ -118,11 +129,7 @@ export class CommandManager {
       const placeholder = new RegExp(`\\{\\{${escapedKey}\\}\\}`, 'g');
       script = script.replace(placeholder, () => this.escapeShellArg(String(value)));
     }
-    // Reject execution if any placeholders remain unresolved
-    const unresolved = script.match(/\{\{[^}]+\}\}/g);
-    if (unresolved) {
-      return null;
-    }
+    
     return script;
   }
 
@@ -156,9 +163,9 @@ export class CommandManager {
         return { success: false, error: `Unknown command: ${name}` };
       }
       // Unresolved placeholders detected
-      const unresolvedMatch = command.script.match(/\{\{[^}]+\}\}/g);
+      const unresolvedMatch = command.script.match(/\{\{([^}]+)\}\}/g);
       const missing = unresolvedMatch
-        ? unresolvedMatch.map(p => p.replace(/[{}]/g, '')).filter(p => !(p in args))
+        ? unresolvedMatch.map(p => p.slice(2, -2)).filter(p => !(p in args))
         : [];
       return {
         success: false,

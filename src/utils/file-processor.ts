@@ -22,7 +22,7 @@ export async function expandFilePaths(message: string, cwd: string = process.cwd
     projectRoot: cwd,
   };
 
-  const imports = findFileReferences(message);
+  const imports = await findFileReferences(message, cwd);
   if (imports.length === 0) return message;
 
   let result = '';
@@ -41,7 +41,7 @@ export async function expandFilePaths(message: string, cwd: string = process.cwd
     // Safety check: ensure file is within current project or at least doesn't traverse upwards too far
     // For now, we allow any file relative to cwd, but we'll track unique files
     if (state.processedFiles.has(fullPath)) {
-      result += `<!-- File already included: ${rawPath} -->`;
+      result += `\n--- File: ${rawPath} ---\n(File already included above)\n--- End of File: ${rawPath} ---\n`;
       continue;
     }
 
@@ -52,11 +52,16 @@ export async function expandFilePaths(message: string, cwd: string = process.cwd
         state.processedFiles.add(fullPath);
         
         result += `\n--- File: ${rawPath} ---\n${content.trim()}\n--- End of File: ${rawPath} ---\n`;
+      } else if (stats.isDirectory()) {
+         const entries = await fs.readdir(fullPath, { withFileTypes: true });
+         const list = entries.map(e => e.isDirectory() ? `${e.name}/` : e.name).join('\n');
+         state.processedFiles.add(fullPath);
+         result += `\n--- Directory: ${rawPath} ---\n${list}\n--- End of Directory: ${rawPath} ---\n`;
       } else {
-         result += `<!-- Skipping ${rawPath}: Not a file -->`;
+         result += `\n<!-- Skipping ${rawPath}: Not a file or directory. -->\n`;
       }
     } catch (error: any) {
-      result += `<!-- Failed to read ${rawPath}: ${error.message} -->`;
+      result += `\n<!-- Failed to read file at "${rawPath}": ${error.message}. CRITICAL: The user provided a malformed path (possibly due to spaces). STOP using tools (Read/Bash) to guess the path. ASK the user to provide the path in quotes: @"path with spaces". -->\n`;
     }
   }
 
@@ -68,9 +73,9 @@ export async function expandFilePaths(message: string, cwd: string = process.cwd
 
 /**
  * Finds all @path-like references in the text.
- * Logic matches gemini-cli: looks for @ followed by characters until whitespace/newline.
+ * Supports greedy matching for spaces by checking file existence.
  */
-function findFileReferences(content: string): Array<{ start: number; end: number; rawPath: string }> {
+async function findFileReferences(content: string, cwd: string): Promise<Array<{ start: number; end: number; rawPath: string }>> {
   const references: Array<{ start: number; end: number; rawPath: string }> = [];
   let i = 0;
   const len = content.length;
@@ -86,31 +91,91 @@ function findFileReferences(content: string): Array<{ start: number; end: number
       continue;
     }
 
-    // Find the end of the path (whitespace, newline, or typical punctuation at end of sentence)
     let j = i + 1;
-    while (
-      j < len &&
-      !isWhitespace(content[j]) &&
-      !isEndDelimiter(content[j])
-    ) {
-      j++;
+    let rawPath = '';
+    let foundEnd = -1;
+
+    // Handle quoted paths: @"path with spaces" (highest priority)
+    if (j < len && (content[j] === '"' || content[j] === "'")) {
+      const quoteChar = content[j];
+      const startQuote = j;
+      j++; // skip opening quote
+      
+      const endQuote = content.indexOf(quoteChar, j);
+      if (endQuote !== -1) {
+        rawPath = content.slice(j, endQuote);
+        foundEnd = endQuote + 1;
+      } else {
+        j = startQuote; // Unclosed quote, fallback to greedy
+      }
     }
 
-    const rawPath = content.slice(i + 1, j);
+    // Greedy matching for unquoted paths
+    if (foundEnd === -1) {
+      let currentCandidate = "";
+      let bestPath = "";
+      let bestEnd = -1;
+      let k = i + 1;
 
-    // Basic validation: must start with something path-like
-    if (
-      rawPath.length > 0 &&
-      (rawPath[0] === '.' || rawPath[0] === '/' || isLetter(rawPath[0]))
-    ) {
+      // Scan ahead until newline or a very long distance
+      while (k < len && content[k] !== '\n' && (k - i) < 255) {
+        currentCandidate += content[k];
+        
+        // Only run fs.stat at word boundaries to reduce I/O overhead
+        const nextChar = k + 1 < len ? content[k + 1] : '\n';
+        const isBoundary = isWhitespace(nextChar) || nextChar === '\n' || isEndDelimiter(nextChar) || (k - i + 1) >= 255;
+        
+        if (isBoundary) {
+          // Check if the current candidate (potentially with spaces) exists
+          const trimmedCandidate = currentCandidate.trim();
+          // Remove trailing delimiters from candidate for check
+          const cleanCandidate = trimmedCandidate.replace(/[.,;:)\]}"'>]+$/, '');
+          
+          if (cleanCandidate.length > 0) {
+            try {
+              const fullPath = path.resolve(cwd, cleanCandidate);
+              const stats = await fs.stat(fullPath);
+              if (stats.isFile() || stats.isDirectory()) {
+                bestPath = cleanCandidate;
+                const matchIndex = currentCandidate.lastIndexOf(cleanCandidate);
+                bestEnd = i + 1 + matchIndex + cleanCandidate.length;
+              }
+            } catch {
+              // Not a valid path yet, keep looking
+            }
+          }
+        }
+        k++;
+      }
+
+      if (bestPath) {
+        rawPath = bestPath;
+        foundEnd = bestEnd;
+      } else {
+        // Fallback: until next whitespace (original behavior for non-existent/new files)
+        let fallbackK = i + 1;
+        while (
+          fallbackK < len &&
+          !isWhitespace(content[fallbackK]) &&
+          !isEndDelimiter(content[fallbackK])
+        ) {
+          fallbackK++;
+        }
+        rawPath = content.slice(i + 1, fallbackK);
+        foundEnd = fallbackK;
+      }
+    }
+
+    // Basic validation
+    if (rawPath.length > 0) {
       references.push({
         start: i,
-        end: j,
+        end: foundEnd,
         rawPath,
       });
     }
 
-    i = j;
+    i = foundEnd;
   }
 
   return references;

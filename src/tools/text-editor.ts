@@ -13,6 +13,12 @@ export class TextEditorTool {
     viewRange?: [number, number]
   ): Promise<ToolResult> {
     try {
+      if (!filePath) {
+        return {
+          success: false,
+          error: "No file path provided to view.",
+        };
+      }
       const resolvedPath = path.resolve(filePath);
 
       if (await fs.pathExists(resolvedPath)) {
