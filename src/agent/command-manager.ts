@@ -120,7 +120,7 @@ export class CommandManager {
       // Escape regex special characters in keys to prevent ReDoS
       const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const placeholder = new RegExp(`\\{\\{${escapedKey}\\}\\}`, 'g');
-      script = script.replace(placeholder, this.escapeShellArg(String(value)));
+      script = script.replace(placeholder, () => this.escapeShellArg(String(value)));
     }
     // Reject execution if any placeholders remain unresolved
     const unresolved = script.match(/\{\{[^}]+\}\}/g);
@@ -216,8 +216,8 @@ export class CommandManager {
    */
   private escapeShellArg(arg: string): string {
     if (process.platform === 'win32') {
-      // Windows cmd.exe: wrap in double quotes, escape internal special chars
-      return '"' + arg.replace(/["%!^&|<>]/g, '^$&') + '"';
+      // Windows cmd.exe: wrap in double quotes, escape internal double quotes
+      return '"' + arg.replace(/"/g, '""') + '"';
     }
     // POSIX: wrap in single quotes, escape internal single quotes
     return "'" + arg.replace(/'/g, "'\\''") + "'";
@@ -233,7 +233,7 @@ export class CommandManager {
    */
   private findProjectRoot(startPath: string): string | null {
     let currentPath = startPath;
-    while (currentPath !== path.parse(currentPath).root) {
+    while (true) {
       if (
         fs.existsSync(path.join(currentPath, '.grok')) ||
         fs.existsSync(path.join(currentPath, '.claude')) ||
@@ -241,19 +241,12 @@ export class CommandManager {
       ) {
         return currentPath;
       }
-      currentPath = path.dirname(currentPath);
+      const parentPath = path.dirname(currentPath);
+      if (parentPath === currentPath) {
+        return null;
+      }
+      currentPath = parentPath;
     }
-
-    // Check the filesystem root as well
-    if (
-      fs.existsSync(path.join(currentPath, '.grok')) ||
-      fs.existsSync(path.join(currentPath, '.claude')) ||
-      fs.existsSync(path.join(currentPath, '.git'))
-    ) {
-      return currentPath;
-    }
-
-    return null;
   }
 
   /**
@@ -326,6 +319,26 @@ export class CommandManager {
     const description = descMatch ? descMatch[1].trim() : `Custom command: ${name}`;
 
     // Split body into sections by ## headings for section-aware parsing
+    const sections = this.parseSections(body);
+
+    const parameters = this.extractParameters(sections, body, filePath);
+    const script = this.extractScript(sections, body);
+
+    if (!script) {
+      console.warn(`No script found in command file: ${filePath}`);
+      return null;
+    }
+
+    return { name, description, parameters, script, filePath };
+  }
+
+  /**
+   * Splits a Markdown body into sections keyed by lowercase heading text.
+   *
+   * @param body - The Markdown body content (after frontmatter).
+   * @returns A Map of heading name (lowercase) to section content.
+   */
+  private parseSections(body: string): Map<string, string> {
     const sections = new Map<string, string>();
     const sectionRegex = /^##\s+(.+)$/gm;
     let lastHeading = '';
@@ -342,67 +355,68 @@ export class CommandManager {
     if (lastHeading) {
       sections.set(lastHeading.toLowerCase(), body.slice(lastIndex));
     }
+    return sections;
+  }
 
-    // Extract parameters JSON from ```json block under ## Parameters section
-    let parameters: Command['parameters'] = {
+  /**
+   * Extracts and parses a JSON Schema parameters block from the given
+   * sections map or the full body as a fallback.
+   *
+   * @param sections - Parsed sections map from parseSections().
+   * @param body - The full Markdown body for fallback parsing.
+   * @param filePath - File path for warning messages.
+   * @returns The parsed parameters object.
+   */
+  private extractParameters(
+    sections: Map<string, string>,
+    body: string,
+    filePath: string
+  ): Command['parameters'] {
+    const defaultParams: Command['parameters'] = {
       type: "object" as const,
       properties: {},
       required: [],
     };
 
-    const parametersSection = sections.get('parameters');
-    if (parametersSection) {
-      const jsonMatch = parametersSection.match(/```json\s*\n([\s\S]*?)\n\s*```/);
-      if (jsonMatch) {
-        try {
-          parameters = JSON.parse(jsonMatch[1].trim());
-        } catch {
-          console.warn(`Failed to parse parameters JSON in ${filePath}`);
-        }
-      }
-    } else {
-      // Fallback: search the entire body for backwards compatibility
-      const jsonMatch = body.match(/```json\s*\n([\s\S]*?)\n\s*```/);
-      if (jsonMatch) {
-        try {
-          parameters = JSON.parse(jsonMatch[1].trim());
-        } catch {
-          console.warn(`Failed to parse parameters JSON in ${filePath}`);
-        }
+    const source = sections.get('parameters') || body;
+    const jsonMatch = source.match(/```json\s*\n([\s\S]*?)\n\s*```/);
+    if (jsonMatch) {
+      try {
+        return JSON.parse(jsonMatch[1].trim());
+      } catch {
+        console.warn(`Failed to parse parameters JSON in ${filePath}`);
       }
     }
+    return defaultParams;
+  }
 
-    // Extract script from ```bash or ```sh block under ## Script/Command section
-    let script = '';
+  /**
+   * Extracts a bash/sh script block from the given sections map
+   * or the full body as a fallback.
+   *
+   * @param sections - Parsed sections map from parseSections().
+   * @param body - The full Markdown body for fallback parsing.
+   * @returns The extracted script string, or empty string if not found.
+   */
+  private extractScript(
+    sections: Map<string, string>,
+    body: string
+  ): string {
     const scriptSection = sections.get('script') || sections.get('command');
     if (scriptSection) {
       const scriptMatch = scriptSection.match(/```(?:bash|sh)\s*\n([\s\S]*?)\n\s*```/);
       if (scriptMatch) {
-        script = scriptMatch[1].trim();
+        return scriptMatch[1].trim();
       }
       // If no fenced block, use the raw section content
-      if (!script) {
-        script = scriptSection.trim();
-      }
-    } else {
-      // Fallback: search the entire body for backwards compatibility
-      const scriptMatch = body.match(/```(?:bash|sh)\s*\n([\s\S]*?)\n\s*```/);
-      if (scriptMatch) {
-        script = scriptMatch[1].trim();
-      }
+      return scriptSection.trim();
     }
 
-    if (!script) {
-      console.warn(`No script found in command file: ${filePath}`);
-      return null;
+    // Fallback: search the entire body for backwards compatibility
+    const scriptMatch = body.match(/```(?:bash|sh)\s*\n([\s\S]*?)\n\s*```/);
+    if (scriptMatch) {
+      return scriptMatch[1].trim();
     }
-
-    return {
-      name,
-      description,
-      parameters,
-      script,
-      filePath,
-    };
+    return '';
   }
 }

@@ -232,6 +232,12 @@ Current working directory: ${process.cwd()}`,
         this.skillsLoaded = true;
       }
 
+      // Load custom commands from .grok/commands or .claude/commands
+      if (!this.commandsLoaded) {
+        await this.commandManager.loadCommands(process.cwd());
+        this.commandsLoaded = true;
+      }
+
       const tools = await getAllGrokTools();
       let currentResponse = await this.grokClient.chat(
         this.messages,
