@@ -671,7 +671,7 @@ Current working directory: ${process.cwd()}`,
 
   private async executeTool(toolCall: GrokToolCall): Promise<ToolResult> {
     try {
-      const args = JSON.parse(toolCall.function.arguments);
+      const args = this.parseToolArguments(toolCall);
 
       switch (toolCall.function.name) {
         case "view_file":
@@ -754,7 +754,7 @@ Current working directory: ${process.cwd()}`,
 
   private async executeMCPTool(toolCall: GrokToolCall): Promise<ToolResult> {
     try {
-      const args = JSON.parse(toolCall.function.arguments);
+      const args = this.parseToolArguments(toolCall);
       const mcpManager = getMCPManager();
 
       const result = await mcpManager.callTool(toolCall.function.name, args);
@@ -799,7 +799,7 @@ Current working directory: ${process.cwd()}`,
    */
   private async executeCustomCommand(toolCall: GrokToolCall): Promise<ToolResult> {
     try {
-      const args = JSON.parse(toolCall.function.arguments);
+      const args = this.parseToolArguments(toolCall);
       const commandName = toolCall.function.name.replace(/^cmd__/, '');
       return await this.commandManager.executeCommand(commandName, args);
     } catch (error: any) {
@@ -807,6 +807,27 @@ Current working directory: ${process.cwd()}`,
         success: false,
         error: `Custom command execution error: ${error.message}`,
       };
+    }
+  }
+
+  /**
+   * Safely parses JSON arguments from a tool call.
+   * Returns an empty object if arguments are missing or malformed.
+   * 
+   * @param toolCall - The tool call containing arguments.
+   * @returns Parsed arguments object.
+   */
+  private parseToolArguments(toolCall: GrokToolCall): any {
+    const rawArgs = toolCall.function.arguments;
+    if (!rawArgs || rawArgs.trim() === "") {
+      return {};
+    }
+    
+    try {
+      return JSON.parse(rawArgs);
+    } catch (error) {
+      console.error(`Failed to parse tool arguments: ${rawArgs}`, error);
+      return {};
     }
   }
 
