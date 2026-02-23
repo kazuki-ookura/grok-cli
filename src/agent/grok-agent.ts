@@ -712,7 +712,7 @@ Current working directory: ${process.cwd()}`,
     }
   }
 
-  private validateArgs(args: any, required: string[]): { valid: true } | { valid: false; error: string } {
+  private validateArgs(args: any, required: string[]): { valid: true; error?: undefined } | { valid: false; error: string } {
     const missing = required.filter(key => args[key] === undefined || args[key] === null);
     if (missing.length > 0) {
       return { valid: false, error: `Missing required arguments: ${missing.join(", ")}` };
