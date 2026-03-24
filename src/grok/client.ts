@@ -4,6 +4,8 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat";
 
 export type GrokMessage = ChatCompletionMessageParam;
 
+const BUILT_IN_SEARCH_TOOL_TYPES = new Set(["web_search", "x_search"]);
+
 export type GrokTool = 
   | {
       type: "function";
@@ -42,6 +44,89 @@ export interface GrokResponse {
     };
     finish_reason: string;
   }>;
+}
+
+function supportsNativeSearchTools(model: string | undefined): boolean {
+  const normalizedModel = (model || "").toLowerCase();
+
+  if (process.env.GROK_DISABLE_NATIVE_SEARCH === "1") {
+    return false;
+  }
+
+  if (process.env.GROK_FORCE_NATIVE_SEARCH === "1") {
+    return true;
+  }
+
+  // xAI currently documents agentic search tooling against the Grok 4 family.
+  return normalizedModel.startsWith("grok-4");
+}
+
+function normalizeToolsForModel(
+  tools: GrokTool[] | undefined,
+  model: string
+): any[] {
+  return (tools || [])
+    .map((tool) => {
+      if (tool.type === "function") {
+        return {
+          type: "function",
+          name: tool.function.name,
+          description: tool.function.description,
+          parameters: tool.function.parameters,
+        };
+      }
+
+      if (
+        BUILT_IN_SEARCH_TOOL_TYPES.has(tool.type) &&
+        !supportsNativeSearchTools(model)
+      ) {
+        return null;
+      }
+
+      return tool;
+    })
+    .filter(Boolean);
+}
+
+function normalizeResponseInput(
+  messages: GrokMessage[],
+  lastResponseId: string | null
+): any[] {
+  if (!lastResponseId) {
+    return messages;
+  }
+
+  if (messages.length === 0) {
+    return [];
+  }
+
+  const trailingToolMessages: any[] = [];
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message: any = messages[index];
+    if (message.role !== "tool") {
+      break;
+    }
+    trailingToolMessages.unshift(message);
+  }
+
+  if (trailingToolMessages.length > 0) {
+    return trailingToolMessages.map((message) => ({
+      type: "function_call_output",
+      call_id: message.tool_call_id,
+      output:
+        typeof message.content === "string"
+          ? message.content
+          : JSON.stringify(message.content ?? ""),
+    }));
+  }
+
+  const lastMessage: any = messages[messages.length - 1];
+  return [
+    {
+      role: lastMessage.role,
+      content: lastMessage.content ?? "",
+    },
+  ];
 }
 
 /**
@@ -110,47 +195,21 @@ export class GrokClient {
     model?: string
   ): Promise<GrokResponse> {
     try {
-      const toolPayload = (tools || []).map(t => {
-        if (t.type === "function") {
-          return {
-            type: "function",
-            name: t.function.name,
-            description: t.function.description,
-            parameters: t.function.parameters
-          };
-        }
-        return t;
-      });
+      const requestedModel = model || this.currentModel;
+      const toolPayload = normalizeToolsForModel(tools, requestedModel);
 
       // Reset state if we have a fresh conversation
       if (messages.length <= 2 && this.lastResponseId) {
         this.lastResponseId = null;
       }
 
-      const lastMessage = messages[messages.length - 1];
-      let input: any;
-
-      if (this.lastResponseId) {
-        // If continuing, only send the latest message
-        if (lastMessage.role === "tool") {
-          input = [{
-            role: "tool",
-            tool_call_id: lastMessage.tool_call_id,
-            content: lastMessage.content
-          }];
-        } else {
-          input = lastMessage.content;
-        }
-      } else {
-        // Starting fresh
-        input = messages;
-      }
+      const input = normalizeResponseInput(messages, this.lastResponseId);
 
       const payload: any = {
-        model: model || this.currentModel,
+        model: requestedModel,
         input,
         tools: toolPayload,
-        tool_choice: tools && tools.length > 0 ? "auto" : undefined,
+        tool_choice: toolPayload.length > 0 ? "auto" : undefined,
         temperature: 0.7,
         max_output_tokens: this.defaultMaxTokens,
         stream: false
@@ -233,47 +292,21 @@ export class GrokClient {
     model?: string
   ): AsyncGenerator<any, void, unknown> {
     try {
-      const toolPayload = (tools || []).map(t => {
-        if (t.type === "function") {
-          return {
-            type: "function",
-            name: t.function.name,
-            description: t.function.description,
-            parameters: t.function.parameters
-          };
-        }
-        return t;
-      });
+      const requestedModel = model || this.currentModel;
+      const toolPayload = normalizeToolsForModel(tools, requestedModel);
 
       // Reset state if we have a fresh conversation
       if (messages.length <= 2 && this.lastResponseId) {
         this.lastResponseId = null;
       }
 
-      const lastMessage = messages[messages.length - 1];
-      let input: any;
-
-      if (this.lastResponseId) {
-        // If continuing, only send the latest message
-        if (lastMessage.role === "tool") {
-          input = [{
-            role: "tool",
-            tool_call_id: lastMessage.tool_call_id,
-            content: lastMessage.content
-          }];
-        } else {
-          input = lastMessage.content;
-        }
-      } else {
-        // Starting fresh
-        input = messages;
-      }
+      const input = normalizeResponseInput(messages, this.lastResponseId);
 
       const payload: any = {
-        model: model || this.currentModel,
+        model: requestedModel,
         input,
         tools: toolPayload,
-        tool_choice: tools && tools.length > 0 ? "auto" : undefined,
+        tool_choice: toolPayload.length > 0 ? "auto" : undefined,
         temperature: 0.7,
         max_output_tokens: this.defaultMaxTokens,
         stream: true
@@ -361,6 +394,14 @@ export class GrokClient {
       content: query,
     };
 
-    return this.chat([searchMessage], [{ type: "web_search" }, { type: "x_search" }]);
+    const searchModel = supportsNativeSearchTools(this.currentModel)
+      ? this.currentModel
+      : "grok-4-1-fast-reasoning";
+
+    return this.chat(
+      [searchMessage],
+      [{ type: "web_search" }, { type: "x_search" }],
+      searchModel
+    );
   }
 }

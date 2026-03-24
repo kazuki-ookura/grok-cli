@@ -127,11 +127,10 @@ You have access to these tools:
 - search: Unified search tool for finding text content or files (similar to Cursor's search functionality)
 - create_todo_list: Create a visual todo list for planning and tracking tasks
 - update_todo_list: Update existing todos in your todo list
-- web_search: Perform a web search to find up-to-date information, news, and facts from the internet
-- x_search: Search the X platform (formerly Twitter) for latest trends and real-time posts
+- web_search / x_search: Built-in internet and X search when supported by the current model
  
 REAL-TIME INFORMATION:
-You have access to real-time information via the built-in search tools (web_search and x_search). When users ask for current information, latest news, or recent events, use these tools to find the most accurate and up-to-date information.
+When the current model supports built-in search tools, you can use web_search and x_search to find current information, latest news, and recent events.
 
 
 IMPORTANT TOOL USAGE RULES:
