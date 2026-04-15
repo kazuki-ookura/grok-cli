@@ -10,7 +10,7 @@ export class BashTool {
   private confirmationService = ConfirmationService.getInstance();
 
 
-  async execute(command: string, timeout: number = 30000): Promise<ToolResult> {
+  async execute(command: string, timeout: number = 120000): Promise<ToolResult> {
     try {
       // Check if user has already accepted bash commands for this session
       const sessionFlags = this.confirmationService.getSessionFlags();
@@ -61,9 +61,24 @@ export class BashTool {
         output: output.trim() || 'Command executed successfully (no output)'
       };
     } catch (error: any) {
+      const details: string[] = [];
+      if (error.killed && error.signal === "SIGTERM") {
+        details.push(`Command timed out after ${timeout}ms`);
+      } else {
+        details.push(`Command failed: ${error.message}`);
+      }
+
+      if (error.stdout?.trim()) {
+        details.push(`STDOUT: ${error.stdout.trim()}`);
+      }
+
+      if (error.stderr?.trim()) {
+        details.push(`STDERR: ${error.stderr.trim()}`);
+      }
+
       return {
         success: false,
-        error: `Command failed: ${error.message}`
+        error: details.join("\n")
       };
     }
   }

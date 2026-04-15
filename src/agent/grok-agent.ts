@@ -88,8 +88,8 @@ export class GrokAgent extends EventEmitter {
     super();
     const manager = getSettingsManager();
     const savedModel = manager.getCurrentModel();
-    const modelToUse = model || savedModel || "grok-code-fast-1";
-    this.maxToolRounds = maxToolRounds || 30;
+    const modelToUse = model || savedModel || "grok-4-1-fast-reasoning";
+    this.maxToolRounds = maxToolRounds || 400;
     this.grokClient = new GrokClient(apiKey, modelToUse, baseURL);
     this.textEditor = new TextEditorTool();
     this.morphEditor = process.env.MORPH_API_KEY ? new MorphEditorTool() : null;

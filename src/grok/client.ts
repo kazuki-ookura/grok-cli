@@ -54,6 +54,8 @@ export class GrokClient {
   private lastResponseId: string | null = null;
   private apiKey: string;
   private baseURL: string;
+  private toolCompatibleFallbackModel: string = "grok-4-1-fast-reasoning";
+  private hasWarnedAboutModelFallback = false;
 
   /**
    * Initializes a new instance of GrokClient.
@@ -73,7 +75,7 @@ export class GrokClient {
     const envMax = Number(process.env.GROK_MAX_TOKENS);
     this.defaultMaxTokens = Number.isFinite(envMax) && envMax > 0 ? envMax : 1536;
     if (model) {
-      this.currentModel = model;
+      this.currentModel = this.resolveToolCompatibleModel(model);
     }
   }
 
@@ -83,7 +85,7 @@ export class GrokClient {
    * @param model - Model name to update (e.g., "grok-3", "grok-2").
    */
   setModel(model: string): void {
-    this.currentModel = model;
+    this.currentModel = this.resolveToolCompatibleModel(model);
   }
 
   /**
@@ -93,6 +95,25 @@ export class GrokClient {
    */
   getCurrentModel(): string {
     return this.currentModel;
+  }
+
+  private supportsServerSideTools(model: string): boolean {
+    return typeof model === "string" && model.toLowerCase().includes("grok-4");
+  }
+
+  private resolveToolCompatibleModel(model: string): string {
+    if (this.supportsServerSideTools(model)) {
+      return model;
+    }
+
+    if (!this.hasWarnedAboutModelFallback) {
+      console.warn(
+        `Model ${model} does not support tool-enabled requests. Falling back to ${this.toolCompatibleFallbackModel}.`
+      );
+      this.hasWarnedAboutModelFallback = true;
+    }
+
+    return this.toolCompatibleFallbackModel;
   }
 
   /**
@@ -146,8 +167,10 @@ export class GrokClient {
         input = messages;
       }
 
+      const requestModel = this.resolveToolCompatibleModel(model || this.currentModel);
+
       const payload: any = {
-        model: model || this.currentModel,
+        model: requestModel,
         input,
         tools: toolPayload,
         tool_choice: tools && tools.length > 0 ? "auto" : undefined,
@@ -269,8 +292,10 @@ export class GrokClient {
         input = messages;
       }
 
+      const requestModel = this.resolveToolCompatibleModel(model || this.currentModel);
+
       const payload: any = {
-        model: model || this.currentModel,
+        model: requestModel,
         input,
         tools: toolPayload,
         tool_choice: tools && tools.length > 0 ? "auto" : undefined,
@@ -293,6 +318,10 @@ export class GrokClient {
 
       const stream = response.data;
       let buffer = "";
+      const pendingToolCalls = new Map<
+        string,
+        { id: string; name: string; arguments: string }
+      >();
 
       for await (const chunk of stream) {
         buffer += chunk.toString();
@@ -317,9 +346,33 @@ export class GrokClient {
                 }]
               };
             } else if (data.type === "response.output_item.added" && data.item?.type === "function_call") {
-              // Note: tool calls in stream might need more complex handling if streamed in parts
-              // but /v1/responses seems to emit the full call at once or as chunks.
-              // For simplicity, we emit when item is added.
+              pendingToolCalls.set(data.item.id, {
+                id: data.item.call_id || data.item.id,
+                name: data.item.name,
+                arguments: data.item.arguments || ""
+              });
+            } else if (data.type === "response.function_call_arguments.delta" && data.item_id) {
+              const pending = pendingToolCalls.get(data.item_id) || {
+                id: data.item_id,
+                name: "",
+                arguments: ""
+              };
+              pending.arguments += data.delta || "";
+              pendingToolCalls.set(data.item_id, pending);
+            } else if (data.type === "response.function_call_arguments.done" && data.item_id) {
+              const pending = pendingToolCalls.get(data.item_id) || {
+                id: data.item_id,
+                name: "",
+                arguments: ""
+              };
+              pending.arguments = data.arguments || pending.arguments;
+              pendingToolCalls.set(data.item_id, pending);
+            } else if (data.type === "response.output_item.done" && data.item?.type === "function_call") {
+              const pending = pendingToolCalls.get(data.item.id);
+              const toolName = data.item.name || pending?.name || "";
+              const toolArguments = data.item.arguments || pending?.arguments || "";
+              pendingToolCalls.delete(data.item.id);
+
               yield {
                 choices: [{
                   delta: {
@@ -328,8 +381,8 @@ export class GrokClient {
                       id: data.item.call_id || data.item.id,
                       type: "function",
                       function: {
-                        name: data.item.name,
-                        arguments: data.item.arguments || ""
+                        name: toolName,
+                        arguments: toolArguments
                       }
                     }]
                   }
